@@ -1,0 +1,49 @@
+# 集群内的极简 git 服务(git daemon),代替 GitHub 当代码源,这样整套东西不依赖外网仓库。
+# 数据在 emptyDir 里,Pod 重启就没了,只适合本地练手。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: git-server
+  namespace: ci
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: git-server }
+  template:
+    metadata:
+      labels: { app: git-server }
+    spec:
+      containers:
+        - name: git
+          image: alpine:3.20
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              apk add --no-cache git git-daemon >/dev/null
+              git init --bare -b main /srv/git/demo-app.git
+              exec git daemon --reuseaddr --verbose --base-path=/srv/git \
+                --export-all --enable=receive-pack /srv/git
+          ports:
+            - containerPort: 9418
+          readinessProbe:
+            tcpSocket: { port: 9418 }
+            periodSeconds: 2
+          volumeMounts:
+            - { name: repos, mountPath: /srv/git }
+      volumes:
+        - name: repos
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: git-server
+  namespace: ci
+spec:
+  type: NodePort
+  selector: { app: git-server }
+  ports:
+    - port: 9418
+      targetPort: 9418
+      nodePort: 30418

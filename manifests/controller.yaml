@@ -1,0 +1,90 @@
+# 控制面的两个进程,用的是同一个镜像:
+#   ci-webhook  : 收 push 事件,创建 PipelineRun
+#   ci-operator : 盯着 PipelineRun,建 Job、写 status
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ci-webhook
+  namespace: ci
+spec:
+  replicas: 1
+  # 先停旧的再起新的,避免重启时请求打到正在退出的旧 Pod
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: ci-webhook }
+  template:
+    metadata:
+      labels: { app: ci-webhook }
+    spec:
+      serviceAccountName: ci-webhook
+      containers:
+        - name: webhook
+          image: localhost:5001/ci-controller:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef: { name: webhook-secret, key: secret }
+            - name: CI_NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ci-webhook
+  namespace: ci
+spec:
+  type: NodePort
+  selector: { app: ci-webhook }
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ci-operator
+  namespace: ci
+spec:
+  replicas: 1
+  # 同一时间只能有一个 operator 在处理,所以也是先停后起
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: ci-operator }
+  template:
+    metadata:
+      labels: { app: ci-operator }
+    spec:
+      serviceAccountName: ci-operator
+      containers:
+        - name: operator
+          image: localhost:5001/ci-controller:latest
+          imagePullPolicy: Always
+          command: ["kopf", "run", "--standalone", "--namespace=$(CI_NAMESPACE)",
+                    "--liveness=http://0.0.0.0:8081/healthz", "reconciler.py"]
+          env:
+            - name: CI_NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+            - { name: DEPLOY_NAMESPACE, value: apps }
+            # 每个仓库保留多少次已结束的运行(连同日志和工作区),更早的自动删除
+            - { name: RUN_HISTORY_LIMIT, value: "10" }
+            # 可选:配了才会回写 GitHub commit status(见 scripts/github-connect.sh)
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef: { name: github-token, key: token, optional: true }
+            - { name: WEB_BASE_URL, value: "http://localhost:18080" }
+            # 构建 Pod 往这里推镜像(集群内地址);节点从 PULL_REGISTRY 拉(同一个仓库的另一个名字)
+            - { name: PUSH_REGISTRY, value: "kind-registry:5000" }
+            - { name: PULL_REGISTRY, value: "localhost:5001" }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8081 }
+            initialDelaySeconds: 10
+            periodSeconds: 10

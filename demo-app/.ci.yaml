@@ -1,0 +1,18 @@
+steps:
+  # lint 和 test 都没写 needs,clone 完就同时开始
+  - name: lint
+    image: python:3.12-alpine
+    run: python -m compileall -q .
+  - name: test
+    image: python:3.12-alpine
+    run: python -m unittest discover -v
+  - name: smoke
+    needs: [lint, test]
+    image: python:3.12-alpine
+    run: python -c "import app; print(app.greeting())"
+
+build:
+  dockerfile: Dockerfile
+
+deploy:
+  manifest: deploy.yaml

@@ -1,0 +1,151 @@
+# ci   : 控制器、git 服务、每次构建的 Job 都在这里
+# apps : 流水线把应用部署到这里
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ci
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apps
+---
+# webhook 的身份:只能创建/查看 PipelineRun、读构建日志。它建不了 Pod。
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-webhook
+  namespace: ci
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-webhook
+  namespace: ci
+rules:
+  - apiGroups: ["mini-ci.dev"]
+    resources: ["pipelineruns"]
+    verbs: ["create", "get", "list"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ci-webhook
+  namespace: ci
+subjects:
+  - kind: ServiceAccount
+    name: ci-webhook
+    namespace: ci
+roleRef:
+  kind: Role
+  name: ci-webhook
+  apiGroup: rbac.authorization.k8s.io
+---
+# operator 的身份:盯着 PipelineRun,替它们建步骤 Pod 和工作区、写 status
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-operator
+  namespace: ci
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-operator
+  namespace: ci
+rules:
+  - apiGroups: ["mini-ci.dev"]
+    resources: ["pipelineruns"]
+    verbs: ["get", "list", "watch", "patch", "delete"]
+  - apiGroups: ["mini-ci.dev"]
+    resources: ["pipelineruns/status"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["create", "get"]
+  - apiGroups: ["", "events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ci-operator
+  namespace: ci
+subjects:
+  - kind: ServiceAccount
+    name: ci-operator
+    namespace: ci
+roleRef:
+  kind: Role
+  name: ci-operator
+  apiGroup: rbac.authorization.k8s.io
+---
+# kopf 启动时要看一眼集群里有哪些 CRD 和命名空间(只读)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ci-operator-crd-reader
+rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ci-operator-crd-reader
+subjects:
+  - kind: ServiceAccount
+    name: ci-operator
+    namespace: ci
+roleRef:
+  kind: ClusterRole
+  name: ci-operator-crd-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+# 构建 Pod 的身份:只能在 apps 里发布 Deployment / Service
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-runner
+  namespace: ci
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-deployer
+  namespace: apps
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ci-deployer
+  namespace: apps
+subjects:
+  - kind: ServiceAccount
+    name: ci-runner
+    namespace: ci
+roleRef:
+  kind: Role
+  name: ci-deployer
+  apiGroup: rbac.authorization.k8s.io

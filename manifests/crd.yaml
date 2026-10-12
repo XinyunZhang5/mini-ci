@@ -1,0 +1,88 @@
+# PipelineRun:一次流水线运行。
+# spec 是"要跑什么"(谁都可以创建),status 是"跑成什么样了"(只有 operator 写)。
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: pipelineruns.mini-ci.dev
+spec:
+  group: mini-ci.dev
+  scope: Namespaced
+  names:
+    kind: PipelineRun
+    plural: pipelineruns
+    singular: pipelinerun
+    shortNames: [run, runs]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - { name: Repo, type: string, jsonPath: .spec.repo }
+        - { name: Phase, type: string, jsonPath: .status.phase }
+        - { name: Step, type: string, jsonPath: .status.currentStep }
+        - { name: Age, type: date, jsonPath: .metadata.creationTimestamp }
+        - { name: Message, type: string, jsonPath: .status.message, priority: 1 }
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [repo, cloneUrl, sha]
+              properties:
+                repo:
+                  type: string
+                  pattern: "^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?$"
+                cloneUrl:
+                  type: string
+                  minLength: 1
+                sha:
+                  type: string
+                  pattern: "^[0-9a-f]{40}$"
+                # 来自 GitHub 的运行才有:operator 会回写 commit status,clone 时带上 token
+                github:
+                  type: object
+                  required: [repo]
+                  properties:
+                    repo:
+                      type: string
+                      pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+              x-kubernetes-validations:
+                # 一次运行对应一个确定的 commit,创建后不许改
+                - rule: "self == oldSelf"
+                  message: "spec 创建后不可修改"
+                # token 只能发给 github.com 上对应的那个仓库
+                - rule: "!has(self.github) || self.cloneUrl == 'https://github.com/' + self.github.repo + '.git'"
+                  message: "带 github 字段时,cloneUrl 必须是该仓库在 github.com 上的地址"
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Running, Succeeded, Failed, Skipped]
+                message: { type: string }
+                # 解析后的 .ci.yaml,operator 每一轮都照它调度
+                pipeline:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                currentStep: { type: string }
+                startedAt: { type: string }
+                finishedAt: { type: string }
+                steps:
+                  type: array
+                  items:
+                    type: object
+                    required: [name, state]
+                    properties:
+                      name: { type: string }
+                      state:
+                        type: string
+                        enum: [Pending, Running, Succeeded, Failed, Skipped]
+                      needs:
+                        type: array
+                        items: { type: string }
+                      exitCode: { type: integer }
+                      reason: { type: string }

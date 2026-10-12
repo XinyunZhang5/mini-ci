@@ -1,0 +1,15 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: cicd
+containerdConfigPatches:
+  # 让节点按 /etc/containerd/certs.d 下的配置找镜像仓库(up.sh 会写入 localhost:5001 的映射)
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # NodePort -> 本机端口,省掉 kubectl port-forward
+      - { containerPort: 30080, hostPort: 18080 } # ci-webhook
+      - { containerPort: 30418, hostPort: 19418 } # 集群内 git 服务
+      - { containerPort: 30090, hostPort: 18090 } # 被部署的 demo-app

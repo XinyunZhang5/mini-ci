@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mini-ci</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --line: #e3e1da; --text: #1f2328; --muted: #6b7078;
+    --accent: #2f5fd0; --ok: #1f8a4c; --bad: #c8372d; --run: #2f5fd0; --idle: #9aa0a8;
+    --ok-bg: #e6f4ec; --bad-bg: #fbe9e7; --run-bg: #e8eefc; --idle-bg: #eeeeea;
+    --log-bg: #14171c; --log-text: #d6dae0;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --panel: #1b1e24; --line: #2b2f37; --text: #e4e6ea; --muted: #8b919b;
+      --accent: #7da2ff; --ok: #4cc38a; --bad: #ff7b6e; --run: #7da2ff; --idle: #6f7580;
+      --ok-bg: #173326; --bad-bg: #3a1d1a; --run-bg: #1c2a4a; --idle-bg: #23262d;
+      --log-bg: #0e1013; --log-text: #cfd3da;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
+  .app { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
+  aside { border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
+  .brand { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+  .brand h1 { margin: 0; font-size: 16px; letter-spacing: .01em; }
+  .brand p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .run { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line);
+         background: none; color: inherit; font: inherit; padding: 12px 20px; cursor: pointer; }
+  .run:hover { background: var(--bg); }
+  .run[aria-current="true"] { background: var(--bg); box-shadow: inset 3px 0 0 var(--accent); }
+  .run:focus-visible, .node:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .run .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .run .repo { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run .meta { color: var(--muted); font-size: 12px; margin-top: 2px; display: flex; gap: 10px; }
+  .sha { font-family: var(--mono); }
+  .badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; font-weight: 500; }
+  .Succeeded { color: var(--ok); background: var(--ok-bg); }
+  .Failed { color: var(--bad); background: var(--bad-bg); }
+  .Running { color: var(--run); background: var(--run-bg); }
+  .Pending, .Skipped { color: var(--muted); background: var(--idle-bg); }
+  main { overflow-y: auto; padding: 28px 32px 40px; min-width: 0; }
+  .empty { color: var(--muted); margin-top: 20vh; text-align: center; }
+  header.detail h2 { margin: 0 0 4px; font-size: 20px; font-family: var(--mono); font-weight: 600; word-break: break-all; }
+  header.detail .sub { color: var(--muted); display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+  .message { margin-top: 12px; padding: 10px 14px; border-radius: 8px; background: var(--bad-bg); color: var(--bad); }
+  h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 28px 0 10px; font-weight: 600; }
+  .graph { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; overflow-x: auto; }
+  svg { display: block; }
+  .edge { fill: none; stroke: var(--line); stroke-width: 1.5; }
+  .edge.done { stroke: var(--ok); opacity: .55; }
+  .node { cursor: pointer; }
+  .node rect { fill: var(--idle-bg); stroke: var(--idle); stroke-width: 1.2; rx: 8; }
+  .node text { fill: var(--text); font-size: 13px; font-family: var(--mono); pointer-events: none; }
+  .node .dot { fill: var(--idle); }
+  .node.Succeeded rect { fill: var(--ok-bg); stroke: var(--ok); } .node.Succeeded .dot { fill: var(--ok); }
+  .node.Failed rect { fill: var(--bad-bg); stroke: var(--bad); } .node.Failed .dot { fill: var(--bad); }
+  .node.Running rect { fill: var(--run-bg); stroke: var(--run); } .node.Running .dot { fill: var(--run); animation: pulse 1.1s ease-in-out infinite; }
+  .node.Skipped rect { stroke-dasharray: 4 3; } .node.Skipped text { fill: var(--muted); }
+  .node.selected rect { stroke-width: 2.4; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .node.Running .dot { animation: none; } }
+  .loghead { display: flex; align-items: baseline; gap: 10px; }
+  .loghead code { font-family: var(--mono); font-size: 13px; text-transform: none; letter-spacing: 0; color: var(--text); }
+  pre { margin: 0; background: var(--log-bg); color: var(--log-text); border-radius: 10px; padding: 16px 18px;
+        font: 12.5px/1.6 var(--mono); overflow: auto; max-height: 46vh; white-space: pre-wrap; word-break: break-word; }
+  pre:empty::before { content: "(这个步骤还没有输出)"; color: #7b828c; }
+  @media (max-width: 760px) { .app { grid-template-columns: 1fr; height: auto; } aside { max-height: 40vh; } main { padding: 20px 16px; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand"><h1>mini-ci</h1><p id="summary">加载中</p></div>
+    <nav id="runs" aria-label="运行记录"></nav>
+  </aside>
+  <main id="main"><p class="empty">还没有运行记录。push 一次代码试试。</p></main>
+</div>
+<script>
+const $ = (tag, attrs = {}, ...kids) => {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === "class" ? (el.className = v) : el.setAttribute(k, v);
+  el.append(...kids);
+  return el;
+};
+const svg = (tag, attrs = {}, ...kids) => {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  el.append(...kids);
+  return el;
+};
+const PHASE = { Pending: "排队中", Running: "运行中", Succeeded: "成功", Failed: "失败", Skipped: "已跳过" };
+const ago = (iso) => {
+  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return `${Math.floor(s)} 秒前`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+  return `${Math.floor(s / 86400)} 天前`;
+};
+const duration = (run) => {
+  if (!run.finished) return null;
+  const s = Math.round((new Date(run.finished) - new Date(run.created)) / 1000);
+  return s < 60 ? `用时 ${s} 秒` : `用时 ${Math.floor(s / 60)} 分 ${s % 60} 秒`;
+};
+
+let runs = [], selectedRun = location.hash.slice(1) || null, selectedStep = null, stepPickedByUser = false;
+
+function renderList() {
+  const running = runs.filter((r) => r.phase === "Running").length;
+  document.getElementById("summary").textContent =
+    runs.length ? `${runs.length} 次运行` + (running ? `,${running} 次进行中` : "") : "暂无运行";
+  document.getElementById("runs").replaceChildren(...runs.map((r) => {
+    const btn = $("button", { class: "run", "aria-current": String(r.run === selectedRun) },
+      $("div", { class: "top" }, $("span", { class: "repo" }, r.github || r.repo),
+        $("span", { class: `badge ${r.phase}` }, PHASE[r.phase])),
+      $("div", { class: "meta" }, $("span", { class: "sha" }, r.sha.slice(0, 7)), $("span", {}, ago(r.created)),
+        $("span", {}, r.phase === "Running" ? (r.currentStep || "") : "")));
+    btn.onclick = () => select(r.run);
+    return btn;
+  }));
+}
+
+function layout(steps) {
+  const layer = {};
+  for (const s of steps) layer[s.name] = s.needs.length ? Math.max(...s.needs.map((n) => layer[n] ?? 0)) + 1 : 0;
+  const cols = [];
+  for (const s of steps) (cols[layer[s.name]] ||= []).push(s);
+  const W = 110, H = 40, GX = 34, GY = 16;
+  const rows = Math.max(...cols.map((c) => c.length));
+  const height = rows * H + (rows - 1) * GY;
+  const pos = {};
+  cols.forEach((col, i) => {
+    const colHeight = col.length * H + (col.length - 1) * GY;
+    col.forEach((s, j) => (pos[s.name] = { x: i * (W + GX), y: (height - colHeight) / 2 + j * (H + GY) }));
+  });
+  return { pos, W, H, width: cols.length * W + (cols.length - 1) * GX, height };
+}
+
+function renderGraph(run) {
+  const { pos, W, H, width, height } = layout(run.steps);
+  const state = Object.fromEntries(run.steps.map((s) => [s.name, s.state]));
+  const root = svg("svg", { width: width + 2, height: height + 2, viewBox: `-1 -1 ${width + 2} ${height + 2}`, role: "img",
+    "aria-label": "步骤依赖图" });
+  // 只画直接依赖:如果 n 已经能通过 s 的另一个依赖到达,这条线就是多余的
+  const needs = Object.fromEntries(run.steps.map((s) => [s.name, s.needs]));
+  const reaches = (from, to) => needs[from].some((n) => n === to || reaches(n, to));
+  for (const s of run.steps) for (const n of s.needs) {
+    if (s.needs.some((other) => other !== n && reaches(other, n))) continue;
+    const a = pos[n], b = pos[s.name], x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2, mx = (x1 + x2) / 2;
+    root.append(svg("path", { class: "edge" + (state[n] === "Succeeded" ? " done" : ""),
+      d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` }));
+  }
+  for (const s of run.steps) {
+    const p = pos[s.name];
+    const g = svg("g", { class: `node ${s.state}` + (s.name === selectedStep ? " selected" : ""), tabindex: 0, role: "button",
+        "aria-label": `${s.name}: ${PHASE[s.state]}`, transform: `translate(${p.x},${p.y})` },
+      svg("rect", { width: W, height: H }), svg("circle", { class: "dot", cx: 16, cy: H / 2, r: 4.5 }),
+      svg("text", { x: 30, y: H / 2 + 4.5 }, s.name.length > 10 ? s.name.slice(0, 9) + "…" : s.name));
+    const pick = () => { selectedStep = s.name; stepPickedByUser = true; renderDetail(); };
+    g.onclick = pick;
+    g.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+    root.append(g);
+  }
+  return root;
+}
+
+async function renderDetail() {
+  const run = runs.find((r) => r.run === selectedRun);
+  const main = document.getElementById("main");
+  if (!run) return;
+  if (!stepPickedByUser || !run.steps.some((s) => s.name === selectedStep)) {
+    // 没手动选过时,自动跟着看:失败的 > 正在跑的 > 最后一个开始过的
+    const by = (st) => run.steps.filter((s) => s.state === st);
+    selectedStep = (by("Failed")[0] || by("Running")[0] || by("Succeeded").at(-1) || run.steps[0] || {}).name || null;
+  }
+  const head = $("header", { class: "detail" }, $("h2", {}, run.run),
+    $("div", { class: "sub" }, $("span", { class: `badge ${run.phase}` }, PHASE[run.phase]),
+      $("span", {}, run.github || run.repo), $("span", { class: "sha" }, run.sha),
+      $("span", {}, ago(run.created)), $("span", {}, duration(run) || run.currentStep || "")));
+  const parts = [head];
+  if (run.message) parts.push($("div", { class: "message", role: "status" }, run.message));
+  if (run.steps.length) {
+    parts.push($("h3", {}, "步骤"), $("div", { class: "graph" }, renderGraph(run)));
+    const step = run.steps.find((s) => s.name === selectedStep);
+    const pre = $("pre", { id: "log", tabindex: 0 });
+    const old = document.getElementById("log");
+    if (old && old.dataset.key === `${run.run}/${selectedStep}`) pre.textContent = old.textContent;
+    pre.dataset.key = `${run.run}/${selectedStep}`;
+    parts.push($("h3", { class: "loghead" }, "日志 ", $("code", {}, selectedStep),
+      $("span", { class: `badge ${step.state}` }, PHASE[step.state])), pre);
+    main.replaceChildren(...parts);
+    if (step.state !== "Pending" && step.state !== "Skipped") {
+      const key = pre.dataset.key;
+      const text = await fetch(`/runs/${run.run}/logs/${selectedStep}`).then((r) => (r.ok ? r.text() : ""));
+      const now = document.getElementById("log");
+      if (now && now.dataset.key === key && now.textContent !== text) {
+        const stick = now.scrollTop + now.clientHeight >= now.scrollHeight - 8;
+        now.textContent = text;
+        if (stick) now.scrollTop = now.scrollHeight;
+      }
+    }
+  } else {
+    main.replaceChildren(...parts);
+  }
+}
+
+function select(name) {
+  selectedRun = name; selectedStep = null; stepPickedByUser = false;
+  history.replaceState(null, "", "#" + name);
+  renderList(); renderDetail();
+}
+
+async function refresh() {
+  try {
+    runs = await fetch("/runs").then((r) => r.json());
+    if (!runs.some((r) => r.run === selectedRun)) selectedRun = runs[0]?.run || null;
+    renderList();
+    if (selectedRun) renderDetail();
+  } catch { document.getElementById("summary").textContent = "连不上 mini-ci,稍后重试"; }
+}
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>
