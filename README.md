@@ -1,166 +1,140 @@
-# mini-ci:用 Kubernetes 手搓的 CI/CD
+# mini-ci
+
+A Kubernetes-native CI/CD system built from scratch: a custom resource, an operator, and a scheduler that runs each pipeline step as its own Pod.
 
 [![CI](https://github.com/XinyunZhang5/mini-ci/actions/workflows/ci.yml/badge.svg)](https://github.com/XinyunZhang5/mini-ci/actions/workflows/ci.yml)
 
-![mini-ci 网页:运行列表、步骤依赖图和日志](docs/ui.png)
+**English** · [中文](README.zh-CN.md) · [**Live demo**](https://xinyunzhang5.github.io/mini-ci/) (simulated data, no backend)
 
-一次 `git push` → webhook 创建一个 `PipelineRun` 资源 → operator 读取仓库里的 `.ci.yaml`,按依赖关系为每个步骤起一个 Pod(互不依赖的并行),并把进度写回 `PipelineRun.status` → 新版本上线。
+[![The mini-ci dashboard: run list, step dependency graph, and live logs](docs/ui.png)](https://xinyunzhang5.github.io/mini-ci/)
+
+## What it does
+
+You push a commit. A webhook records it as a `PipelineRun` resource in the cluster. An operator reads the `.ci.yaml` in that commit, turns it into a dependency graph, and starts a Pod for every step whose dependencies have finished. Independent steps run in parallel. The result is written back to the `PipelineRun` and, for GitHub repositories, to the commit status.
 
 ```
-push ──▶ git-server ─┐
-                     │ (scripts/trigger.py 模拟 GitHub 发 webhook)
-                     ▼
-               ci-webhook ──创建──▶ PipelineRun ◀──写 status──┐
-                                        │                      │
-                                        └──watch──▶ ci-operator(kopf,读 .ci.yaml)
-                                                        │ 每个步骤一个 Pod,共用一个工作区 PVC
-                                                        ▼
-                                              ┌▶ lint ─┐
-                                       clone ─┤        ├▶ smoke ▶ build(Kaniko) ▶ deploy
-                                              └▶ test ─┘              │              │
-                                                                      ▼              ▼
-                                                               kind-registry   apps/demo-app
+git push ──▶ webhook ──creates──▶ PipelineRun ◀──writes status──┐
+                                       │                         │
+                                       └──watched by──▶ operator (kopf)
+                                                           │ one Pod per step, shared workspace volume
+                                                           ▼
+                                                 ┌▶ lint ─┐
+                                          clone ─┤        ├▶ smoke ▶ build (Kaniko) ▶ deploy
+                                                 └▶ test ─┘
 ```
 
-## 用法
+## Highlights
 
-前置:Docker 在运行,已装 `kind`、`kubectl`。
+- **Declarative, like Kubernetes itself.** A run is a `PipelineRun` custom resource. `kubectl get runs -w` shows progress, and `kubectl delete run <name>` cancels it: its Pods and workspace are garbage-collected through owner references.
+- **Survives operator crashes.** The operator keeps no state of its own. Kill it mid-run and the replacement picks up from what is in the cluster. An end-to-end test does exactly this.
+- **DAG scheduling.** Steps declare `needs`. A failed step skips its dependents while siblings already running are allowed to finish. The scheduling decision is one pure function with unit tests ([`runstatus.py`](controller/runstatus.py)).
+- **Untrusted steps get no credentials.** Steps run arbitrary commands from the repository, so their Pods mount no service account token. Only the deploy step can touch the cluster, and only one namespace of it. The GitHub token reaches the clone step alone and is never written to the workspace.
+- **GitHub integration.** Reads `.ci.yaml` through the contents API, clones private repositories, and reports `pending` / `success` / `failure` as a commit status.
+- **Tested end to end.** 16 unit tests and 8 end-to-end scenarios run against a real kind cluster in GitHub Actions on every push.
 
-```bash
-make up                  # 起集群、镜像仓库、git 服务、webhook 和 operator
-make demo                # 提交并 push demo-app/,触发流水线并等它跑完
-open http://localhost:18080   # 网页:运行列表、依赖图、日志
-curl localhost:18090     # 访问部署出来的应用
-```
+## Measured
 
-改 `demo-app/app.py` 里的 `MESSAGE` 再跑一次 `push-demo.sh` 就能看到更新发布。
-把测试改挂再 push,流水线会停在 test,线上版本不动。
+Four identical jobs (`sleep 10` each), run once as a chain and once with no dependencies between them. Median of three trials on a single-node kind cluster (8-core Mac):
 
-| 地址 | 是什么 |
+| | Wall time |
 |---|---|
-| `localhost:18080` | 网页 |
-| `localhost:18080/runs` | 所有运行记录及状态(`/runs/<run>` 看单个) |
-| `localhost:18080/runs/<run>/logs` | 某次运行各步骤的日志(`/logs/<step>` 看单个步骤) |
-| `localhost:18090` | 被部署的 demo-app |
-| `git://localhost:19418/demo-app.git` | 集群内的 git 服务 |
+| Sequential (each step needs the previous one) | 55.2s |
+| Parallel (no `needs`) | 19.1s |
+| Speedup | 2.89x |
 
-`make down` 全部拆掉。
+It is not 4x because every run pays fixed costs: the clone step, and about 2 seconds of scheduling latency per step (time from a step's dependencies finishing to its container starting; median 2.0s, max 3.0s over 24 samples). The jobs sleep, so this measures scheduling, not CPU-bound builds. Reproduce with `python3 scripts/bench.py`.
 
-## 接到真实的 GitHub 仓库
+## Quick start
 
-```bash
-gh extension install cli/gh-webhook                # 只需一次
-./scripts/github-connect.sh <owner/repo>           # 前台运行,Ctrl-C 停止
-```
-
-之后往这个仓库 push,本机集群里就会跑流水线,结果写回 GitHub 的 commit status(显示在 commit 和 PR 上的勾或叉)。
-
-这个脚本做两件事:
-
-- 把 `gh` 当前账号的 token 存进集群(`secret/github-token`)。operator 用它通过 API 读 `.ci.yaml`、回写状态;clone 步骤用它拉私有仓库,用完不会留在工作区里。
-- 用 `gh webhook forward` 让 GitHub 把 push 事件转发到本机,不需要公网地址。脚本停掉后转发也就停了。
-
-仓库里要有 `.ci.yaml`、`Dockerfile` 和部署清单;仓库名和 Deployment 名不同时,在 `deploy.rollout` 里写明。
-
-## 测试
+Requires Docker, [kind](https://kind.sigs.k8s.io/), and kubectl.
 
 ```bash
-make test    # 单元测试:配置解析和调度逻辑,不需要集群
-make e2e     # 端到端测试:对着 make up 拉起的集群跑,约 2 分钟
+make up                        # kind cluster, local registry, in-cluster git server, webhook, operator
+make demo                      # commit and push demo-app/, trigger a pipeline, wait for it
+open http://localhost:18080    # dashboard
+curl localhost:18090           # the app the pipeline just deployed
+make down                      # tear everything down
 ```
 
-端到端测试覆盖:并行与依赖顺序、失败传播、非法配置、无配置、取消、operator 中途重启、构建并部署、签名校验。
-GitHub Actions 里每次 push 都会起一个 kind 集群把两套测试跑一遍。
+Change `MESSAGE` in `demo-app/app.py` and run `make demo` again to watch a new version roll out. Break the test and the pipeline stops before the build, leaving the running version untouched.
 
-## 用 kubectl 操作运行
+## Pipeline definition
 
-运行记录就是集群里的 `PipelineRun` 资源(简称 `run`):
-
-```bash
-alias k='kubectl --context kind-cicd -n ci'
-k get runs                    # 列表:仓库、阶段、当前步骤
-k get runs -w                 # 实时看进度
-k get run <name> -o yaml      # 每个步骤的状态和退出码
-k delete run <name>           # 取消:它名下的 Pod 和工作区会被自动回收
-```
-
-阶段(`status.phase`):`Pending` → `Running` → `Succeeded` / `Failed` / `Skipped`(commit 里没有 `.ci.yaml`)。
-失败原因在 `status.message` 里,`k get runs -o wide` 能直接看到。
-
-## 目录
-
-| 路径 | 内容 |
-|---|---|
-| `controller/app.py` | webhook:验 HMAC 签名、校验参数、创建 `PipelineRun`、查状态和日志、提供网页 |
-| `controller/static/index.html` | 网页,单文件,无依赖 |
-| `controller/github.py` | 读 GitHub 上的 `.ci.yaml`、回写 commit status |
-| `controller/reconciler.py` | operator(kopf):reconcile 循环,按依赖图建步骤 Pod,把进度写回 status,清理旧运行 |
-| `controller/runstatus.py` | 调度核心:由步骤图和各 Pod 状态算出"谁该开始、整体到哪了"的纯函数(`test_runstatus.py` 是它的单元测试) |
-| `controller/ciconfig.py` | 取出并校验某个 commit 里的 `.ci.yaml`(`test_ciconfig.py` 是它的单元测试) |
-| `controller/pipeline.py` | 把 `.ci.yaml` 翻译成步骤图,以及每个步骤的 Pod 和工作区 PVC |
-| `manifests/crd.yaml` | `PipelineRun` 的定义:字段校验、status 子资源、`kubectl get` 的显示列 |
-| `manifests/base.yaml` | 命名空间和 RBAC(webhook 只能建 `PipelineRun`,operator 才能建 Pod,只有 deploy 步骤能往 `apps` 发布) |
-| `manifests/git-server.yaml` | 集群内 git daemon,代替 GitHub 当代码源 |
-| `manifests/controller.yaml` | webhook 和 operator 的 Deployment(共用一个镜像) |
-| `cluster/kind-config.yaml` | kind 集群配置和端口映射 |
-| `demo-app/` | 被构建和部署的示例应用 |
-| `scripts/` | `up.sh` / `push-demo.sh` / `trigger.py` / `github-connect.sh` / `down.sh` |
-| `tests/e2e.py` | 端到端测试 |
-| `.github/workflows/ci.yml` | CI:单元测试 + kind 上的端到端测试 |
-
-## .ci.yaml
-
-放在仓库根目录。没有这个文件的运行会标成 `Skipped`,写错了标成 `Failed` 并在 `status.message` 里给出具体原因。
+A `.ci.yaml` at the repository root:
 
 ```yaml
-steps:                      # 必填
-  - name: lint              # 没写 needs:clone 完就开始,和其它没写 needs 的步骤并行
+steps:
+  - name: lint              # no `needs`: starts right after clone, in parallel with test
     image: python:3.12-alpine
     run: python -m compileall -q .
   - name: test
     image: python:3.12-alpine
     run: python -m unittest discover -v
-    env: {KEY: value}       # 可选
+    env: {KEY: value}       # optional
   - name: smoke
-    needs: [lint, test]     # 等这些步骤都成功了才开始
+    needs: [lint, test]     # waits for both
     image: python:3.12-alpine
     run: python -c "import app"
-build:                      # 可选:所有 steps 成功后,用 Kaniko 构建并推送镜像
-  dockerfile: Dockerfile    # 默认 Dockerfile
-  context: .                # 默认 .
-deploy:                     # 可选:build 之后 kubectl apply 并等 rollout 完成
-  manifest: deploy.yaml     # 默认 deploy.yaml
-  rollout: deployment/xxx   # 默认 deployment/<仓库名>
+build:                      # optional: build and push an image with Kaniko once all steps pass
+  dockerfile: Dockerfile
+deploy:                     # optional: kubectl apply, then wait for the rollout
+  manifest: deploy.yaml     # __IMAGE__ is replaced with the image that was just built
 ```
 
-每个步骤在 `/workspace/src`(仓库根目录)下用 `sh -ec` 执行,自动带上 `CI`、`CI_REPO`、`CI_COMMIT_SHA`。
-所有步骤共享 `/workspace`,前面步骤产出的文件后面能看到;并行的步骤也在同一个目录里,注意别写同一个文件。
+A commit without this file is marked `Skipped`. Unknown fields, missing steps in `needs`, and dependency cycles are rejected before anything runs, with the reason in `status.message`.
 
-一个步骤失败后,依赖它的步骤标为 `Skipped`,已经在跑的并行步骤会跑完,然后整次运行记为 `Failed`。
-`needs` 指向不存在的步骤或形成循环,都会在开始前被拒绝。
+## Working with runs
 
-## 几个设计点
+```bash
+alias k='kubectl --context kind-cicd -n ci'
+k get runs                    # repo, phase, current step
+k get runs -w                 # follow progress
+k get run <name> -o yaml      # per-step state and exit codes
+k delete run <name>           # cancel
+```
 
-- **声明式**:webhook 只写"要跑什么"(`spec`),operator 负责让它发生并回报"跑成什么样了"(`status`)。所有状态都在集群里,operator 自己不记东西,所以它停机期间收到的 push 不会丢,运行中途重启也能接上。
-- **每个步骤一个 Pod**:这样互不依赖的步骤才能并行。operator 每次 reconcile 都重新看一遍"哪些 Pod 已成功",把依赖刚好满足的步骤建出来;解析后的 `.ci.yaml` 存在 `status.pipeline` 里,不用反复读仓库。
-- **Pod 和工作区归 PipelineRun 所有**:带 `ownerReferences`,删掉 `PipelineRun` 就等于取消运行并回收一切。Pod 名是 `<run>-<step>`,重复创建会 409,同一步骤不会跑两遍。
-- **历史保留**:每个仓库保留最近 10 次已结束的运行(`RUN_HISTORY_LIMIT`),日志和工作区跟着运行一起保留、一起删除。
-- **凭证隔离**:`.ci.yaml` 里的步骤跑的是仓库里写的任意命令,它们的 Pod 不挂任何 ServiceAccount token,只有 deploy 步骤用能发布的身份。
-- **镜像仓库有两个名字**:构建 Pod 往 `kind-registry:5000` 推,节点从 `localhost:5001` 拉,指向同一个仓库容器。
-- **部署约定**:清单里的 `__IMAGE__` 会被替换成本次构建的镜像。
-- **webhook 格式**:和 GitHub 的 push 事件一致(`X-Hub-Signature-256` + `repository.clone_url` + `after`),接真实 GitHub 时只需要把 webhook 暴露到公网。
+## Connecting a real GitHub repository
 
-## 还没做的
+```bash
+gh extension install cli/gh-webhook          # once
+./scripts/github-connect.sh <owner/repo>     # runs in the foreground, Ctrl-C to stop
+```
 
-- 工作区是 `ReadWriteOnce` 的 PVC,只在单节点集群上成立;多节点要换成 RWX 存储,或改成步骤间用对象存储传产物。
-- 没有并发上限,一次能并行多少步骤只受集群资源限制;一个步骤失败不会主动取消正在跑的并行步骤。
-- 没有按分支过滤,任何分支的 push 都会跑。
-- 回写 commit status 是尽力而为的:写失败只记一条警告,不会重试。
-- GitHub 接入是开发用途:靠 `gh webhook forward` 转发,用的是 `gh` 登录账号的 token(权限比实际需要的大)。正式使用应换成 GitHub App 和公网入口。
-- 没有构建缓存,没有给步骤注入密钥的办法。
-- 网页没有登录,只适合本机访问;日志随运行记录一起清理,没有长期存储。
-- 只有 `PipelineRun` 一种资源,没有登记仓库的 `Pipeline` 资源:webhook 信任签名过的请求里带的 `clone_url`(GitHub token 只会发给 github.com 上对应的仓库)。
-- operator 是单副本,没有 leader 选举。
-- 超时是每个步骤 15 分钟,按墙上时钟算:电脑中途休眠会让正在跑的步骤超时失败。
-- git 服务的数据在 `emptyDir` 里,Pod 重启后仓库会变空,重跑一次 `push-demo.sh` 即可。
-- git 服务没有鉴权,只适合本机练手。
+This stores your `gh` token in the cluster and uses `gh webhook forward` to relay push events to your machine, so no public endpoint is needed. Pushes to that repository then run on your local cluster and report back to the commit.
+
+## Tests
+
+```bash
+make test    # unit tests: config parsing and scheduling, no cluster needed
+make e2e     # end-to-end against the cluster from `make up`, about 2 minutes
+```
+
+The end-to-end suite covers parallelism and ordering, failure propagation, invalid and missing configuration, cancellation, operator restart mid-run, build and deploy, and webhook signature checks.
+
+## Layout
+
+| Path | What is in it |
+|---|---|
+| [`controller/reconciler.py`](controller/reconciler.py) | The operator: reconcile loop, Pod creation, status updates, history pruning |
+| [`controller/runstatus.py`](controller/runstatus.py) | The scheduler: a pure function from graph plus Pod states to "what starts next" |
+| [`controller/pipeline.py`](controller/pipeline.py) | Turns `.ci.yaml` into a step graph, Pods, and the workspace volume |
+| [`controller/ciconfig.py`](controller/ciconfig.py) | Parses and validates `.ci.yaml` |
+| [`controller/app.py`](controller/app.py) | Webhook receiver, REST API, and the dashboard |
+| [`controller/github.py`](controller/github.py) | Contents API and commit statuses |
+| [`manifests/`](manifests) | CRD, RBAC, and Deployments |
+| [`tests/e2e.py`](tests/e2e.py) | End-to-end tests |
+
+## Limitations
+
+This is a learning project, not a replacement for Tekton or Argo Workflows.
+
+- The workspace is a `ReadWriteOnce` volume, which only works on a single node. Multiple nodes would need RWX storage or artifact passing through object storage.
+- One operator replica, no leader election.
+- No build cache, no way to inject secrets into steps, no per-step resource overrides.
+- The dashboard has no authentication. Logs live as long as the run record (the last 10 runs per repository).
+- GitHub integration is for development: it relies on `gh webhook forward` and a personal token rather than a GitHub App.
+- Commit status reporting is best effort and is not retried.
+
+## License
+
+[MIT](LICENSE)

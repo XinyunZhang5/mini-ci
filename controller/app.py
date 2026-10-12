@@ -21,7 +21,7 @@ WEBHOOK_SECRET = os.environ["WEBHOOK_SECRET"].encode()
 
 REPO_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,40}[a-z0-9])?$")
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-INDEX_HTML = os.path.join(os.path.dirname(__file__), "static", "index.html")
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ZERO_SHA = "0" * 40
 
@@ -59,7 +59,13 @@ def _summary(run: dict) -> dict:
 
 @app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(INDEX_HTML)
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
+@app.get("/demo.js", include_in_schema=False)
+def demo_data():
+    # 网页的演示模式(?demo)用的模拟数据;同一份文件也发布到 GitHub Pages
+    return FileResponse(os.path.join(STATIC_DIR, "demo.js"), media_type="text/javascript")
 
 
 @app.get("/healthz")

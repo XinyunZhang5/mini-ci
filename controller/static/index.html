@@ -6,80 +6,192 @@
 <title>mini-ci</title>
 <style>
   :root {
-    --bg: #f6f5f1; --panel: #ffffff; --line: #e3e1da; --text: #1f2328; --muted: #6b7078;
-    --accent: #2f5fd0; --ok: #1f8a4c; --bad: #c8372d; --run: #2f5fd0; --idle: #9aa0a8;
-    --ok-bg: #e6f4ec; --bad-bg: #fbe9e7; --run-bg: #e8eefc; --idle-bg: #eeeeea;
-    --log-bg: #14171c; --log-text: #d6dae0;
+    --text: #f2f3ff; --muted: #a6abd8; --faint: #6f74a8;
+    --glass: rgba(170, 180, 255, .07); --glass-strong: rgba(170, 180, 255, .13);
+    --line: rgba(196, 204, 255, .2); --glow: rgba(190, 205, 255, .55);
+    --ok: #a9d6ff; --bad: #ff8fb8; --run: #ffffff; --idle: #8187bd;
+    --display: "Avenir Next", "Montserrat", "Lato", "PingFang SC", sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #14161a; --panel: #1b1e24; --line: #2b2f37; --text: #e4e6ea; --muted: #8b919b;
-      --accent: #7da2ff; --ok: #4cc38a; --bad: #ff7b6e; --run: #7da2ff; --idle: #6f7580;
-      --ok-bg: #173326; --bad-bg: #3a1d1a; --run-bg: #1c2a4a; --idle-bg: #23262d;
-      --log-bg: #0e1013; --log-text: #cfd3da;
-    }
-  }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 14px/1.5 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif; }
-  .app { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
-  aside { border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
-  .brand { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
-  .brand h1 { margin: 0; font-size: 16px; letter-spacing: .01em; }
-  .brand p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
-  .run { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line);
-         background: none; color: inherit; font: inherit; padding: 12px 20px; cursor: pointer; }
-  .run:hover { background: var(--bg); }
-  .run[aria-current="true"] { background: var(--bg); box-shadow: inset 3px 0 0 var(--accent); }
-  .run:focus-visible, .node:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .run .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .run .repo { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .run .meta { color: var(--muted); font-size: 12px; margin-top: 2px; display: flex; gap: 10px; }
+  html { background: #05061a; }
+  body { margin: 0; color: var(--text); min-height: 100vh; overflow: hidden;
+         font: 14px/1.5 var(--display);
+         background: linear-gradient(180deg, #040517 0%, #0b0d2e 38%, #1d1a4d 68%, #40305f 100%); }
+
+  /* 夜空:星星画在 canvas 上,底部是几团模糊的云,中间一道从门缝里漏出来的光 */
+  #stars, .sky { position: fixed; inset: 0; pointer-events: none; }
+  #stars { width: 100%; height: 100%; }
+  .beam { position: fixed; top: -10vh; bottom: -10vh; left: 50%; width: 38vw; transform: translateX(-30%);
+          background: linear-gradient(90deg, transparent, rgba(190, 205, 255, .1) 30%, rgba(225, 232, 255, .2) 50%, rgba(190, 205, 255, .1) 70%, transparent);
+          filter: blur(46px); pointer-events: none; }
+  .cloud { position: fixed; pointer-events: none; filter: blur(22px); }
+  .cloud.a, .cloud.b { bottom: -9vh; width: 58vw; height: 44vh; background:
+      radial-gradient(ellipse 30% 46% at 22% 66%, rgba(196, 196, 240, .78), transparent 70%),
+      radial-gradient(ellipse 26% 40% at 46% 54%, rgba(160, 166, 226, .7), transparent 70%),
+      radial-gradient(ellipse 34% 50% at 70% 72%, rgba(126, 126, 198, .72), transparent 72%),
+      radial-gradient(ellipse 60% 44% at 50% 100%, rgba(84, 78, 150, .9), transparent 74%); }
+  .cloud.a { left: -8vw; }
+  .cloud.b { right: -8vw; transform: scaleX(-1); }
+  .cloud.c { left: 0; right: 0; bottom: -4vh; height: 26vh; filter: blur(40px);
+             background: linear-gradient(180deg, transparent, rgba(70, 62, 128, .75)); }
+  @media (prefers-reduced-motion: no-preference) {
+    .cloud.a { animation: drift 46s ease-in-out infinite alternate; }
+    .cloud.b { animation: drift-b 58s ease-in-out infinite alternate; }
+  }
+  @keyframes drift { to { transform: translateX(4vw); } }
+  @keyframes drift-b { to { transform: scaleX(-1) translateX(4vw); } }
+
+  .app { position: relative; display: grid; grid-template-columns: 330px 1fr; height: 100vh; }
+  aside { overflow-y: auto; background: rgba(8, 9, 34, .42); border-right: 1px solid var(--line);
+          backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+  .brand { padding: 30px 26px 22px; position: sticky; top: 0; z-index: 1;
+           background: linear-gradient(180deg, rgba(8, 9, 34, .92), rgba(8, 9, 34, .55) 80%, transparent); }
+  .brand h1 { margin: 0; font-size: 27px; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; color: #fff;
+              text-shadow: 0 0 6px #fff, 0 0 18px rgba(200, 212, 255, .95), 0 0 44px rgba(150, 170, 255, .7); }
+  .brand .rule { height: 1px; width: 132px; margin: 16px 0 12px;
+                 background: linear-gradient(90deg, #fff, rgba(255, 255, 255, 0)); box-shadow: 0 0 10px var(--glow); }
+  .brand p { margin: 0; color: var(--muted); font-size: 12px; letter-spacing: .1em; }
+  .brand p.demo { margin-top: 8px; color: var(--faint); font-size: 11px; }
+
+  .run { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid rgba(196, 204, 255, .09);
+         background: none; color: inherit; font: inherit; padding: 14px 26px; cursor: pointer; position: relative;
+         transition: background .2s; }
+  .run:hover { background: var(--glass); }
+  .run[aria-current="true"] { background: var(--glass-strong); }
+  .run[aria-current="true"]::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px;
+         background: #fff; box-shadow: 0 0 8px #fff, 0 0 22px var(--glow); border-radius: 2px; }
+  .run:focus-visible, .node:focus-visible, pre:focus-visible { outline: 1px solid #fff; outline-offset: -2px; box-shadow: 0 0 14px var(--glow); }
+  .run .top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .run .repo { font-weight: 600; letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run .meta { color: var(--muted); font-size: 12px; margin-top: 3px; display: flex; gap: 12px; }
   .sha { font-family: var(--mono); }
-  .badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; font-weight: 500; }
-  .Succeeded { color: var(--ok); background: var(--ok-bg); }
-  .Failed { color: var(--bad); background: var(--bad-bg); }
-  .Running { color: var(--run); background: var(--run-bg); }
-  .Pending, .Skipped { color: var(--muted); background: var(--idle-bg); }
-  main { overflow-y: auto; padding: 28px 32px 40px; min-width: 0; }
-  .empty { color: var(--muted); margin-top: 20vh; text-align: center; }
-  header.detail h2 { margin: 0 0 4px; font-size: 20px; font-family: var(--mono); font-weight: 600; word-break: break-all; }
-  header.detail .sub { color: var(--muted); display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
-  .message { margin-top: 12px; padding: 10px 14px; border-radius: 8px; background: var(--bad-bg); color: var(--bad); }
-  h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 28px 0 10px; font-weight: 600; }
-  .graph { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; overflow-x: auto; }
-  svg { display: block; }
-  .edge { fill: none; stroke: var(--line); stroke-width: 1.5; }
-  .edge.done { stroke: var(--ok); opacity: .55; }
+
+  .badge { font-size: 11px; padding: 2px 10px; border-radius: 999px; white-space: nowrap; font-weight: 600; letter-spacing: .1em;
+           border: 1px solid currentColor; background: rgba(255, 255, 255, .04); }
+  .Succeeded { color: var(--ok); text-shadow: 0 0 10px rgba(150, 200, 255, .8); }
+  .Failed { color: var(--bad); text-shadow: 0 0 10px rgba(255, 143, 184, .7); }
+  .Running { color: var(--run); text-shadow: 0 0 10px rgba(255, 255, 255, .9); box-shadow: 0 0 12px rgba(200, 212, 255, .45); }
+  .Pending, .Skipped { color: var(--idle); }
+
+  main { overflow-y: auto; padding: 40px 44px 56px; min-width: 0; }
+  .empty { color: var(--muted); margin-top: 26vh; text-align: center; letter-spacing: .12em; }
+  header.detail h2 { margin: 0 0 10px; font-size: 25px; font-weight: 600; letter-spacing: .06em; word-break: break-all; color: #fff;
+                     text-shadow: 0 0 8px rgba(255, 255, 255, .7), 0 0 28px rgba(160, 180, 255, .6); }
+  header.detail .sub { color: var(--muted); display: flex; flex-wrap: wrap; gap: 16px; align-items: center; letter-spacing: .03em; }
+  .message { margin-top: 18px; padding: 12px 16px; border-radius: 12px; color: var(--bad);
+             background: rgba(255, 143, 184, .08); border: 1px solid rgba(255, 143, 184, .4); box-shadow: 0 0 22px rgba(255, 143, 184, .16); }
+  h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .3em; color: var(--muted); margin: 36px 0 12px; font-weight: 600; }
+
+  .graph, pre { background: rgba(10, 11, 40, .46); border: 1px solid var(--line); border-radius: 16px;
+                backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+                box-shadow: 0 0 0 1px rgba(255, 255, 255, .03) inset, 0 0 46px rgba(140, 160, 255, .13); }
+  .graph { padding: 28px; overflow-x: auto; }
+  svg { display: block; overflow: visible; }
+  .edge { fill: none; stroke: rgba(196, 204, 255, .25); stroke-width: 1.2; }
+  .edge.done { stroke: rgba(235, 240, 255, .85); filter: drop-shadow(0 0 4px rgba(190, 205, 255, .9)); }
   .node { cursor: pointer; }
-  .node rect { fill: var(--idle-bg); stroke: var(--idle); stroke-width: 1.2; rx: 8; }
-  .node text { fill: var(--text); font-size: 13px; font-family: var(--mono); pointer-events: none; }
+  .node rect { fill: rgba(150, 160, 255, .07); stroke: var(--idle); stroke-width: 1; rx: 10; transition: fill .2s; }
+  .node:hover rect { fill: rgba(170, 180, 255, .17); }
+  .node text { fill: var(--text); font-size: 13px; font-family: var(--display); letter-spacing: .06em; pointer-events: none; }
   .node .dot { fill: var(--idle); }
-  .node.Succeeded rect { fill: var(--ok-bg); stroke: var(--ok); } .node.Succeeded .dot { fill: var(--ok); }
-  .node.Failed rect { fill: var(--bad-bg); stroke: var(--bad); } .node.Failed .dot { fill: var(--bad); }
-  .node.Running rect { fill: var(--run-bg); stroke: var(--run); } .node.Running .dot { fill: var(--run); animation: pulse 1.1s ease-in-out infinite; }
-  .node.Skipped rect { stroke-dasharray: 4 3; } .node.Skipped text { fill: var(--muted); }
-  .node.selected rect { stroke-width: 2.4; }
-  @keyframes pulse { 50% { opacity: .25; } }
+  .node.Succeeded rect { stroke: var(--ok); filter: drop-shadow(0 0 6px rgba(150, 200, 255, .6)); }
+  .node.Succeeded .dot { fill: var(--ok); }
+  .node.Failed rect { stroke: var(--bad); fill: rgba(255, 143, 184, .1); filter: drop-shadow(0 0 7px rgba(255, 143, 184, .65)); }
+  .node.Failed .dot { fill: var(--bad); }
+  .node.Running rect { stroke: #fff; fill: rgba(255, 255, 255, .12); filter: drop-shadow(0 0 9px rgba(215, 225, 255, .95)); }
+  .node.Running .dot { fill: #fff; animation: pulse 1.2s ease-in-out infinite; }
+  .node.Running text { fill: #fff; }
+  .node.Skipped rect { stroke-dasharray: 4 4; filter: none; } .node.Skipped text { fill: var(--faint); }
+  .node.selected rect { stroke-width: 2.2; fill: rgba(200, 210, 255, .2); }
+  @keyframes pulse { 50% { opacity: .2; } }
   @media (prefers-reduced-motion: reduce) { .node.Running .dot { animation: none; } }
-  .loghead { display: flex; align-items: baseline; gap: 10px; }
-  .loghead code { font-family: var(--mono); font-size: 13px; text-transform: none; letter-spacing: 0; color: var(--text); }
-  pre { margin: 0; background: var(--log-bg); color: var(--log-text); border-radius: 10px; padding: 16px 18px;
-        font: 12.5px/1.6 var(--mono); overflow: auto; max-height: 46vh; white-space: pre-wrap; word-break: break-word; }
-  pre:empty::before { content: "(这个步骤还没有输出)"; color: #7b828c; }
-  @media (max-width: 760px) { .app { grid-template-columns: 1fr; height: auto; } aside { max-height: 40vh; } main { padding: 20px 16px; } }
+
+  .loghead { display: flex; align-items: center; gap: 12px; }
+  .loghead code { font-family: var(--display); font-size: 14px; text-transform: none; letter-spacing: .08em; color: #fff;
+                  text-shadow: 0 0 10px rgba(200, 212, 255, .8); }
+  pre { margin: 0; color: #d5d9ff; padding: 20px 22px; font: 12.5px/1.7 var(--mono);
+        overflow: auto; max-height: 44vh; white-space: pre-wrap; word-break: break-word; }
+  pre:empty::before { content: attr(data-empty); color: var(--faint); letter-spacing: .1em; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: rgba(196, 204, 255, .22); border-radius: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  @media (max-width: 760px) { body { overflow: auto; } .app { grid-template-columns: 1fr; height: auto; }
+    aside { max-height: 42vh; border-right: 0; border-bottom: 1px solid var(--line); } main { padding: 26px 18px; } }
 </style>
 </head>
 <body>
+<canvas id="stars" aria-hidden="true"></canvas>
+<div class="sky" aria-hidden="true"><div class="beam"></div><div class="cloud a"></div><div class="cloud b"></div><div class="cloud c"></div></div>
 <div class="app">
   <aside>
-    <div class="brand"><h1>mini-ci</h1><p id="summary">加载中</p></div>
-    <nav id="runs" aria-label="运行记录"></nav>
+    <div class="brand"><h1>mini-ci</h1><div class="rule"></div><p id="summary">&nbsp;</p></div>
+    <nav id="runs"></nav>
   </aside>
-  <main id="main"><p class="empty">还没有运行记录。push 一次代码试试。</p></main>
+  <main id="main"><p class="empty"></p></main>
 </div>
 <script>
+// 星空:随机撒点,少数亮星带光晕,轻微闪烁
+(() => {
+  const canvas = document.getElementById("stars"), ctx = canvas.getContext("2d");
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let stars = [];
+  const seed = () => {
+    const dpr = devicePixelRatio || 1;
+    canvas.width = innerWidth * dpr; canvas.height = innerHeight * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    stars = Array.from({ length: Math.round(innerWidth * innerHeight / 1100) }, () => {
+      const big = Math.random() < 0.09;
+      return { x: Math.random() * innerWidth, y: Math.pow(Math.random(), 1.35) * innerHeight,
+               r: big ? 1.2 + Math.random() * 1.1 : 0.3 + Math.random() * 0.8, big,
+               base: 0.5 + Math.random() * 0.5, speed: 0.4 + Math.random() * 1.4, phase: Math.random() * 6.28,
+               tint: Math.random() < 0.3 ? "200,190,255" : "235,240,255" };
+    });
+  };
+  const draw = (t) => {
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    for (const s of stars) {
+      const a = still ? s.base : s.base * (0.6 + 0.4 * Math.sin(s.phase + t / 1000 * s.speed));
+      if (s.big) {
+        const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r * 5);
+        g.addColorStop(0, `rgba(${s.tint},${a * 0.55})`); g.addColorStop(1, `rgba(${s.tint},0)`);
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(s.x, s.y, s.r * 5, 0, 6.3); ctx.fill();
+      }
+      ctx.fillStyle = `rgba(${s.tint},${a})`; ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 6.3); ctx.fill();
+    }
+    if (!still) requestAnimationFrame(draw);
+  };
+  seed(); requestAnimationFrame(draw);
+  addEventListener("resize", () => { seed(); if (still) draw(0); });
+})();
+
+// 界面语言跟随浏览器,?lang=en / ?lang=zh 可以强制指定
+const ZH = (new URLSearchParams(location.search).get("lang") || navigator.language || "").toLowerCase().startsWith("zh");
+const T = ZH ? {
+  phase: { Pending: "排队中", Running: "运行中", Succeeded: "成功", Failed: "失败", Skipped: "已跳过" },
+  runs: (n, live) => n ? `${n} 次运行` + (live ? `,${live} 次进行中` : "") : "暂无运行",
+  empty: "还没有运行记录。push 一次代码试试。", steps: "步骤", logs: "日志", noOutput: "这个步骤还没有输出",
+  offline: "连不上 mini-ci,稍后重试", demo: "演示模式 · 模拟数据", graph: "步骤依赖图", list: "运行记录",
+  ago: (n, u) => `${n} ${{ s: "秒", m: "分钟", h: "小时", d: "天" }[u]}前`,
+  took: (m, s) => (m ? `用时 ${m} 分 ${s} 秒` : `用时 ${s} 秒`),
+} : {
+  phase: { Pending: "QUEUED", Running: "RUNNING", Succeeded: "PASSED", Failed: "FAILED", Skipped: "SKIPPED" },
+  runs: (n, live) => n ? `${n} run${n > 1 ? "s" : ""}` + (live ? `, ${live} in progress` : "") : "No runs yet",
+  empty: "No runs yet. Push a commit to start one.", steps: "Steps", logs: "Logs", noOutput: "No output from this step yet",
+  offline: "Cannot reach mini-ci, retrying", demo: "Demo mode · simulated data", graph: "Step dependency graph", list: "Pipeline runs",
+  ago: (n, u) => `${n}${u} ago`,
+  took: (m, s) => (m ? `took ${m}m ${s}s` : `took ${s}s`),
+};
+document.documentElement.lang = ZH ? "zh-CN" : "en";
+
+// 演示模式:没有后端(比如 GitHub Pages 上)时,用 demo.js 里的模拟数据
+const DEMO = location.hostname.endsWith("github.io") || new URLSearchParams(location.search).has("demo");
+const demo = DEMO ? import("./demo.js") : null;
+const getRuns = async () => (demo ? (await demo).runs() : fetch("/runs").then((r) => r.json()));
+const getLog = async (run, step) =>
+  demo ? (await demo).log(run, step) : fetch(`/runs/${run}/logs/${step}`).then((r) => (r.ok ? r.text() : ""));
+
 const $ = (tag, attrs = {}, ...kids) => {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) k === "class" ? (el.className = v) : el.setAttribute(k, v);
@@ -92,30 +204,31 @@ const svg = (tag, attrs = {}, ...kids) => {
   el.append(...kids);
   return el;
 };
-const PHASE = { Pending: "排队中", Running: "运行中", Succeeded: "成功", Failed: "失败", Skipped: "已跳过" };
 const ago = (iso) => {
   const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
-  if (s < 60) return `${Math.floor(s)} 秒前`;
-  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
-  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
-  return `${Math.floor(s / 86400)} 天前`;
+  if (s < 60) return T.ago(Math.floor(s), "s");
+  if (s < 3600) return T.ago(Math.floor(s / 60), "m");
+  if (s < 86400) return T.ago(Math.floor(s / 3600), "h");
+  return T.ago(Math.floor(s / 86400), "d");
 };
 const duration = (run) => {
   if (!run.finished) return null;
   const s = Math.round((new Date(run.finished) - new Date(run.created)) / 1000);
-  return s < 60 ? `用时 ${s} 秒` : `用时 ${Math.floor(s / 60)} 分 ${s % 60} 秒`;
+  return T.took(Math.floor(s / 60), s % 60);
 };
 
 let runs = [], selectedRun = location.hash.slice(1) || null, selectedStep = null, stepPickedByUser = false;
+document.getElementById("runs").setAttribute("aria-label", T.list);
+document.querySelector(".empty").textContent = T.empty;
+if (DEMO) document.querySelector(".brand").append($("p", { class: "demo" }, T.demo));
 
 function renderList() {
   const running = runs.filter((r) => r.phase === "Running").length;
-  document.getElementById("summary").textContent =
-    runs.length ? `${runs.length} 次运行` + (running ? `,${running} 次进行中` : "") : "暂无运行";
+  document.getElementById("summary").textContent = T.runs(runs.length, running);
   document.getElementById("runs").replaceChildren(...runs.map((r) => {
     const btn = $("button", { class: "run", "aria-current": String(r.run === selectedRun) },
       $("div", { class: "top" }, $("span", { class: "repo" }, r.github || r.repo),
-        $("span", { class: `badge ${r.phase}` }, PHASE[r.phase])),
+        $("span", { class: `badge ${r.phase}` }, T.phase[r.phase])),
       $("div", { class: "meta" }, $("span", { class: "sha" }, r.sha.slice(0, 7)), $("span", {}, ago(r.created)),
         $("span", {}, r.phase === "Running" ? (r.currentStep || "") : "")));
     btn.onclick = () => select(r.run);
@@ -143,7 +256,7 @@ function renderGraph(run) {
   const { pos, W, H, width, height } = layout(run.steps);
   const state = Object.fromEntries(run.steps.map((s) => [s.name, s.state]));
   const root = svg("svg", { width: width + 2, height: height + 2, viewBox: `-1 -1 ${width + 2} ${height + 2}`, role: "img",
-    "aria-label": "步骤依赖图" });
+    "aria-label": T.graph });
   // 只画直接依赖:如果 n 已经能通过 s 的另一个依赖到达,这条线就是多余的
   const needs = Object.fromEntries(run.steps.map((s) => [s.name, s.needs]));
   const reaches = (from, to) => needs[from].some((n) => n === to || reaches(n, to));
@@ -156,7 +269,7 @@ function renderGraph(run) {
   for (const s of run.steps) {
     const p = pos[s.name];
     const g = svg("g", { class: `node ${s.state}` + (s.name === selectedStep ? " selected" : ""), tabindex: 0, role: "button",
-        "aria-label": `${s.name}: ${PHASE[s.state]}`, transform: `translate(${p.x},${p.y})` },
+        "aria-label": `${s.name}: ${T.phase[s.state]}`, transform: `translate(${p.x},${p.y})` },
       svg("rect", { width: W, height: H }), svg("circle", { class: "dot", cx: 16, cy: H / 2, r: 4.5 }),
       svg("text", { x: 30, y: H / 2 + 4.5 }, s.name.length > 10 ? s.name.slice(0, 9) + "…" : s.name));
     const pick = () => { selectedStep = s.name; stepPickedByUser = true; renderDetail(); };
@@ -172,29 +285,29 @@ async function renderDetail() {
   const main = document.getElementById("main");
   if (!run) return;
   if (!stepPickedByUser || !run.steps.some((s) => s.name === selectedStep)) {
-    // 没手动选过时,自动跟着看:失败的 > 正在跑的 > 最后一个开始过的
+    // 没手动选过时,自动跟着看:失败的 > 正在跑的 > 最后一个成功的
     const by = (st) => run.steps.filter((s) => s.state === st);
     selectedStep = (by("Failed")[0] || by("Running")[0] || by("Succeeded").at(-1) || run.steps[0] || {}).name || null;
   }
   const head = $("header", { class: "detail" }, $("h2", {}, run.run),
-    $("div", { class: "sub" }, $("span", { class: `badge ${run.phase}` }, PHASE[run.phase]),
+    $("div", { class: "sub" }, $("span", { class: `badge ${run.phase}` }, T.phase[run.phase]),
       $("span", {}, run.github || run.repo), $("span", { class: "sha" }, run.sha),
       $("span", {}, ago(run.created)), $("span", {}, duration(run) || run.currentStep || "")));
   const parts = [head];
   if (run.message) parts.push($("div", { class: "message", role: "status" }, run.message));
   if (run.steps.length) {
-    parts.push($("h3", {}, "步骤"), $("div", { class: "graph" }, renderGraph(run)));
+    parts.push($("h3", {}, T.steps), $("div", { class: "graph" }, renderGraph(run)));
     const step = run.steps.find((s) => s.name === selectedStep);
-    const pre = $("pre", { id: "log", tabindex: 0 });
+    const pre = $("pre", { id: "log", tabindex: 0, "data-empty": T.noOutput });
     const old = document.getElementById("log");
     if (old && old.dataset.key === `${run.run}/${selectedStep}`) pre.textContent = old.textContent;
     pre.dataset.key = `${run.run}/${selectedStep}`;
-    parts.push($("h3", { class: "loghead" }, "日志 ", $("code", {}, selectedStep),
-      $("span", { class: `badge ${step.state}` }, PHASE[step.state])), pre);
+    parts.push($("h3", { class: "loghead" }, T.logs + " ", $("code", {}, selectedStep),
+      $("span", { class: `badge ${step.state}` }, T.phase[step.state])), pre);
     main.replaceChildren(...parts);
     if (step.state !== "Pending" && step.state !== "Skipped") {
       const key = pre.dataset.key;
-      const text = await fetch(`/runs/${run.run}/logs/${selectedStep}`).then((r) => (r.ok ? r.text() : ""));
+      const text = await getLog(run.run, selectedStep);
       const now = document.getElementById("log");
       if (now && now.dataset.key === key && now.textContent !== text) {
         const stick = now.scrollTop + now.clientHeight >= now.scrollHeight - 8;
@@ -209,20 +322,20 @@ async function renderDetail() {
 
 function select(name) {
   selectedRun = name; selectedStep = null; stepPickedByUser = false;
-  history.replaceState(null, "", "#" + name);
+  history.replaceState(null, "", location.pathname + location.search + "#" + name);
   renderList(); renderDetail();
 }
 
 async function refresh() {
   try {
-    runs = await fetch("/runs").then((r) => r.json());
+    runs = await getRuns();
     if (!runs.some((r) => r.run === selectedRun)) selectedRun = runs[0]?.run || null;
     renderList();
     if (selectedRun) renderDetail();
-  } catch { document.getElementById("summary").textContent = "连不上 mini-ci,稍后重试"; }
+  } catch { document.getElementById("summary").textContent = T.offline; }
 }
 refresh();
-setInterval(refresh, 2000);
+setInterval(refresh, DEMO ? 1000 : 2000);
 </script>
 </body>
 </html>

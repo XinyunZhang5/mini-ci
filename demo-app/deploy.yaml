@@ -19,6 +19,12 @@ spec:
           readinessProbe:
             httpGet: { path: /, port: 8000 }
             periodSeconds: 2
+          livenessProbe:
+            httpGet: { path: /, port: 8000 }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: "200m", memory: 96Mi }
 ---
 apiVersion: v1
 kind: Service

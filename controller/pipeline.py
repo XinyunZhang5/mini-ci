@@ -20,6 +20,11 @@ PULL_REGISTRY = os.environ.get("PULL_REGISTRY", "localhost:5001")
 WORKSPACE_SIZE = os.environ.get("WORKSPACE_SIZE", "1Gi")
 STEP_TIMEOUT_SECONDS = 900
 
+# 每个步骤 Pod 的资源配额:requests 决定调度时占多少,limits 是硬上限(超内存会被杀)
+STEP_REQUESTS = {"cpu": "100m", "memory": "64Mi"}
+STEP_LIMITS = {"cpu": os.environ.get("STEP_CPU_LIMIT", "1"), "memory": os.environ.get("STEP_MEMORY_LIMIT", "512Mi")}
+BUILD_LIMITS = {"cpu": "2", "memory": os.environ.get("BUILD_MEMORY_LIMIT", "2Gi")}  # 构建镜像吃内存
+
 SRC = "/workspace/src"
 WORKSPACE = client.V1VolumeMount(name="workspace", mount_path="/workspace")
 
@@ -55,6 +60,7 @@ class Node:
     needs: list[str]
     container: client.V1Container
     can_deploy: bool = False  # 只有 deploy 步骤拿得到能发布的身份
+    limits: dict | None = None  # 不写就用 STEP_LIMITS
 
 
 def _env(**values: str) -> list[client.V1EnvVar]:
@@ -105,6 +111,7 @@ def build_graph(
             Node(
                 name="build",
                 needs=user_steps,
+                limits=BUILD_LIMITS,
                 container=client.V1Container(
                     name="step",
                     image="gcr.io/kaniko-project/executor:v1.23.2",
@@ -166,6 +173,9 @@ def pod_name(run_name: str, step: str) -> str:
 
 def build_pod(node: Node, *, run_name: str, run_uid: str) -> client.V1Pod:
     node.container.volume_mounts = [WORKSPACE]
+    node.container.resources = client.V1ResourceRequirements(
+        requests=STEP_REQUESTS, limits=node.limits or STEP_LIMITS
+    )
     return client.V1Pod(
         metadata=client.V1ObjectMeta(
             # 名字是确定的:重复创建会 409,同一个步骤不会跑出两个 Pod
