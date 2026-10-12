@@ -14,7 +14,8 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  # 排队等上一次发布完成,不取消它:被取消的发布会在提交上显示成失败
+  cancel-in-progress: false
 
 jobs:
   deploy:
